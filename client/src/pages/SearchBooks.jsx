@@ -1,73 +1,79 @@
-import React, { useState, useEffect } from 'react';
-import { useQuery, useMutation } from '@apollo/client';
-import {
-  Container,
-  Col,
-  Form,
-  Button,
-  Card,
-  Row,
-} from 'react-bootstrap';
+import React, { useState, useEffect } from "react";
+import { Container, Col, Form, Button, Card, } from "react-bootstrap";
 
-import Auth from '../utils/auth';
-import { getSavedBookIds, saveBookIds } from '../utils/localStorage';
-import { GET_ME, REMOVE_BOOK, SEARCH_BOOKS } from '../utils/graphql'; // Import your GraphQL queries and mutations
+import Auth from "../utils/auth";
+import { searchGoogleBooks } from "../utils/API";
+import { useMutation } from "@apollo/client";
+import { SAVE_BOOK } from "../utils/mutations";
+import { saveBookIds, getSavedBookIds } from "../utils/localStorage";
 
 const SearchBooks = () => {
-  const [searchInput, setSearchInput] = useState('');
+  // create state for holding returned google api data
+  const [searchedBooks, setSearchedBooks] = useState([]);
+  // create state for holding our search field data
+  const [searchInput, setSearchInput] = useState("");
+
+  const [saveBook, { error }] = useMutation(SAVE_BOOK);
+  // create state to hold saved bookId values
   const [savedBookIds, setSavedBookIds] = useState(getSavedBookIds());
 
-  const { data: userData } = useQuery(GET_ME); // Execute the GET_ME query using useQuery
-
-  const [removeBook] = useMutation(REMOVE_BOOK); // Use the useMutation hook for REMOVE_BOOK mutation
-
-  const { loading, error, data: searchedBooksData, refetch } = useQuery(SEARCH_BOOKS, {
-    variables: { searchInput }, // Pass searchInput as variables for the SEARCH_BOOKS query
-    skip: !searchInput, // Skip query if searchInput is empty
+  // set up useEffect hook to save `savedBookIds` list to localStorage on component unmount
+  // learn more here: https://reactjs.org/docs/hooks-effect.html#effects-with-cleanup
+  useEffect(() => {
+    return () => saveBookIds(savedBookIds);
   });
 
-  const searchedBooks = searchedBooksData?.searchBooks || [];
-
+  // create method to search for books and set state on form submit
   const handleFormSubmit = async (event) => {
     event.preventDefault();
+
     if (!searchInput) {
       return false;
     }
-    // Refetch the SEARCH_BOOKS query with the updated searchInput
-    await refetch({ searchInput });
+
+    try {
+      const response = await searchGoogleBooks(searchInput);
+
+      if (!response.ok) {
+        throw new Error("something went wrong!");
+      }
+
+      const { items } = await response.json();
+
+      const bookData = items.map((book) => ({
+        bookId: book.id,
+        authors: book.volumeInfo.authors || ["No author to display"],
+        title: book.volumeInfo.title,
+        description: book.volumeInfo.description,
+        image: book.volumeInfo.imageLinks?.thumbnail || "",
+      }));
+
+      setSearchedBooks(bookData);
+      setSearchInput("");
+    } catch (err) {
+      console.error(err);
+    }
   };
 
+  // create function to handle saving a book to our database
   const handleSaveBook = async (bookId) => {
-    // Check if user is logged in
+    // find the book in `searchedBooks` state by the matching id
+    const bookToSave = searchedBooks.find((book) => book.bookId === bookId);
+
+    // get token
     const token = Auth.loggedIn() ? Auth.getToken() : null;
+
     if (!token) {
       return false;
     }
 
-    // Extract the book details from searchedBooks using bookId
-    const bookToSave = searchedBooks.find((book) => book.bookId === bookId);
-    const bookData = items.map((book) => ({
-      bookId: book.id,
-      authors: book.volumeInfo.authors || ["No author to display"],
-      title: book.volumeInfo.title,
-      description: book.volumeInfo.description,
-      image: book.volumeInfo.imageLinks?.thumbnail || "",
-    }));
-};
-    // Update savedBookIds state upon successful save
-    if (data?.saveBook) {
-      setSavedBookIds([...savedBookIds, bookToSave.bookId]);
-    };
-
-
-  const handleDeleteBook = async (bookId) => {
     try {
-      const bookToSave = searchedBooks.find((book) => book.bookId === bookId);
-      // Update savedBookIds state upon successful removal
-      if (data?.removeBook) {
-        const updatedSavedBookIds = savedBookIds.filter((id) => id !== bookId);
-        setSavedBookIds(updatedSavedBookIds);
-      }
+      const { data } = await saveBook({
+        variables: { bookData: bookToSave },
+      });
+
+      // if book successfully saves to user's account, save book id to state
+      setSavedBookIds([...savedBookIds, bookToSave.bookId]);
     } catch (err) {
       console.error(err);
     }
@@ -135,5 +141,6 @@ const SearchBooks = () => {
       </Container>
     </>
   );
+};
 
 export default SearchBooks;
